@@ -4,7 +4,10 @@ module.exports = {
   "env": {
     "browser": false,
     "node": true,
-    "es6": false
+    "es6": true
   },
-  "extends": "airbnb"
+  "extends": "airbnb",
+  "rules": {
+    "import/no-extraneous-dependencies": [2, { "devDependencies": true }]
+  }
 }

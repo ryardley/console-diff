@@ -1,87 +1,158 @@
-
 import deepDiff from 'deep-diff';
-class ChromeColorLog {
-  constructor() {
-    this._data = {
-      messages: [],
-      cstyles: [],
-    };
-  }
 
-  addStyledMessage(message, color) {
-    this._data.messages.push(message);
-    this._data.cstyles.push(color);
-  }
+export const types = {
+  ADD: 'ADD',
+  DELETE: 'DELETE',
+  EDIT: 'EDIT',
+  NORMAL: 'NORMAL',
+  START: 'START',
+  END: 'END',
+};
 
-  red(msg) {
-    this.addStyledMessage(msg, 'color:red');
-    return this;
-  }
+const diffTypeMap = {
+  N: types.ADD,
+  D: types.DELETE,
+  E: types.EDIT,
+};
 
-  green(msg) {
-    this.addStyledMessage(msg, 'color:green');
-    return this;
-  }
+export const colors = {
+  green: 'green',
+  red: 'red',
+  black: 'black',
+};
 
-  black(msg) {
-    this.addStyledMessage(msg, 'color:black');
-    return this;
-  }
-
-  concat(colorLog) {
-    this._data.messages.concat(colorLog._data.messages);
-    this._data.cstyles.concat(colorLog._data.cstyles);
-  }
-
-  toPrint() {
-    return [
-      this.messages.map(msg => `%c${msg}`).join(''),
-      ...this.cstyles,
-    ];
-  }
+function mapObj(obj, func) {
+  const mapper = func || (value => value);
+  return Object.keys(obj).map(key =>
+    mapper(obj[key], key)
+  );
 }
-function mapDiffToColorLogObject(change) {
-  const colorLog = new ChromeColorLog();
-  const path = change.path.join('.');
-  if (change.kind === 'PROP') {
-    colorLog.black(` \t${path}: ${change.item}`);
-  }
-  if (change.kind === 'E') {
-    colorLog.red(`-\t${path}: ${change.rhs}\n`);
-    colorLog.green(`+\t${path}: ${change.lhs}\n`);
-  }
-  if (change.kind === 'A') {
-    colorLog.green(`+\t${path}: ${change.item}\n`);
-  }
-  if (change.kind === 'D') {
-    colorLog.red(`-\t${path}\n`);
-  }
+
+function createEditNode({ value, key, level }) {
+  const { green, red } = colors;
+  return [
+    {
+      level,
+      color: red,
+      symbol: '-',
+      text: `${key}: "${value.lhs}"`,
+      newline: true,
+    },
+    {
+      level,
+      color: green,
+      symbol: '+',
+      text: `${key}: "${value.rhs}"`,
+      newline: true,
+    },
+  ];
+}
+
+function createAddNode({ value, key, level }) {
+  const { green } = colors;
   return {
-    cLog: colorLog,
-    prop: path,
+    level,
+    color: green,
+    symbol: '+',
+    text: `${key}: "${value.rhs}"`,
+    newline: true,
   };
 }
 
-export default function consoleDiff(obj1, obj2) {
-  const colorLog = new ChromeColorLog();
-  const diff = deepDiff(obj1, obj2);
+function createDeleteNode({ value, key, level }) {
+  const { red } = colors;
+  return {
+    level,
+    color: red,
+    symbol: '-',
+    text: `${key}: "${value.lhs}"`,
+    newline: true,
+  };
+}
 
-  const mapKeyToDiff = key => ({
-    path: key,
-    item: obj1[key],
+function createNormalNode({ value, key, level }) {
+  const { black } = colors;
+  return {
+    level,
+    color: black,
+    text: key ? `${key}: "${value}"` : value,
+    newline: true,
+  };
+}
+
+function toASTNode({ key, value, type, level }) {
+  const creator = {
+    EDIT: createEditNode,
+    ADD: createAddNode,
+    DELETE: createDeleteNode,
+  }[type] || createNormalNode;
+
+  return creator({
+    key,
+    level,
+    value,
   });
+}
 
-  const clogReducer = (memo, clog) => ({
+const ensureArray = item => (Array.isArray(item) ? item : [item]);
+const flatten = (memo, item) => [
+  ...ensureArray(memo),
+  ...ensureArray(item),
+];
+
+function mergeObjDiffs(obj, diffs) {
+  const addedDiffs = diffs.reduce((memo, value) => ({
     ...memo,
-    [clog.path]: clog,
+    [value.path.join('.')]: value,
+  }), {});
+
+  return {
+    ...obj,
+    ...addedDiffs,
+  };
+}
+
+function calculateType({ kind }) {
+  return diffTypeMap[kind] || types.NORMAL;
+}
+
+function objToASTNodes(obj) {
+  const propNodes = mapObj(obj, (value, key) => ({
+    level: 1,
+    type: calculateType(value),
+    key,
+    value,
+  }))
+  .map(toASTNode)
+  .reduce(flatten);
+
+  const start = toASTNode({
+    level: 0,
+    value: '{',
   });
 
-  const cloggedProps = Object.keys(obj1).map(mapKeyToDiff).map(mapDiffToColorLogObject);
-  const cloggedDiffs = diff.map(mapDiffToColorLogObject);
-  const clogObject = cloggedProps.concat(cloggedDiffs).reduce(clogReducer, {});
-  const clogList = Object.keys(clogObject).map(key => clogObject[key]);
-  const clogStart = colorLog.black('{').black(`\n`);
-  const clogEnd = colorLog.black('}').black(`\n`);
-  const finalClog = [clogStart, ...clogList, clogEnd].reduce((out, item) => out.concat(item), colorLog);
-  console.log(...finalClog.toPrint());
+  const end = toASTNode({
+    level: 0,
+    value: '}',
+  });
+
+  return [
+    start,
+    ...propNodes,
+    end,
+  ];
+}
+
+export function ast(obj1, obj2) {
+  const diff = deepDiff(obj1, obj2);
+  console.log('diff: \n', JSON.stringify(diff, null, 2));
+  const merged = mergeObjDiffs(obj1, diff);
+  console.log('merged: \n', JSON.stringify(merged, null, 2));
+  const output = objToASTNodes(merged);
+  console.log('output: \n', JSON.stringify(output, null, 2));
+  return output;
+}
+
+export default function consoleDiff() {
+  return {};
 }
